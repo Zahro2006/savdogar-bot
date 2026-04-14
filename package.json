@@ -1,0 +1,20 @@
+{
+  "name": "crypto-trade-bot",
+  "version": "1.0.0",
+  "description": "Crypto savdo kundaligi Telegram boti",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "@libsql/client": "^0.3.6",
+    "node-cron": "^3.0.3",
+    "moment": "^2.30.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
