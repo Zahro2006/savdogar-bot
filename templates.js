@@ -53,9 +53,9 @@ function spotTradeTemplate(trade) {
   const duration = calculateDuration(trade.entry_date, trade.exit_date);
 
   return `
-╔══════════════════════╗
+╔═════════════════════╗
      📊 *SPOT SAVDO*
-╚══════════════════════╝
+╚═════════════════════╝
 
 🪙 Token: *#${trade.token.toUpperCase()}*
 
@@ -87,9 +87,9 @@ function futuresTradeTemplate(trade) {
   const duration = calculateDuration(trade.entry_date, trade.exit_date);
 
   return `
-╔══════════════════════╗
+╔═════════════════════╗
     ⚡ *FUTURES SAVDO*
-╚══════════════════════╝
+╚═════════════════════╝
 
 🪙 Token: *#${trade.token.toUpperCase()}*
 📍 Yo'nalish: *${directionEmoji}*
