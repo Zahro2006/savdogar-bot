@@ -1,60 +1,89 @@
-const moment = require('moment');
+const moment = require('moment-timezone');
 
+/**
+ * Barcha shablonlar uchun Toshkent vaqtini qaytaruvchi yordamchi funksiya
+ */
+function getUzTime() {
+    return moment().tz('Asia/Tashkent').format('DD.MM.YYYY HH:mm');
+}
+
+/**
+ * Raqamlarni chiroyli formatlash (4 ta raqamgacha aniqlikda)
+ */
 function formatNumber(num) {
-  if (num === null || num === undefined) return '0';
-  return parseFloat(num.toFixed(4)).toString();
+    if (num === null || num === undefined) return '0';
+    return parseFloat(num.toFixed(4)).toString();
 }
 
+/**
+ * PnL ishorasini qo'shish (+ yoki -)
+ */
 function formatPnL(pnl) {
-  if (pnl > 0) return `+${formatNumber(pnl)}`;
-  return formatNumber(pnl);
+    if (pnl > 0) return `+${formatNumber(pnl)}`;
+    return formatNumber(pnl);
 }
 
+/**
+ * Natijaga qarab emoji tanlash
+ */
 function getPnLEmoji(pnl) {
-  if (pnl > 10) return '🚀';
-  if (pnl > 0) return '📈';
-  if (pnl < -10) return '💥';
-  return '📉';
+    if (pnl > 10) return '🚀';
+    if (pnl > 0) return '📈';
+    if (pnl < -10) return '💥';
+    return '📉';
 }
 
+/**
+ * Savdo davomiyligini hisoblash
+ */
 function calculateDuration(entryDate, exitDate) {
-  const entry = moment(entryDate, 'DD.MM.YYYY HH:mm');
-  const exit = moment(exitDate, 'DD.MM.YYYY HH:mm');
-  const diff = moment.duration(exit.diff(entry));
-  const days = Math.floor(diff.asDays());
-  const hours = diff.hours();
-  const minutes = diff.minutes();
+    const entry = moment.tz(entryDate, 'DD.MM.YYYY HH:mm', 'Asia/Tashkent');
+    const exit = moment.tz(exitDate, 'DD.MM.YYYY HH:mm', 'Asia/Tashkent');
+    const diff = moment.duration(exit.diff(entry));
+    
+    const days = Math.floor(diff.asDays());
+    const hours = diff.hours();
+    const minutes = diff.minutes();
 
-  if (days > 0) return `${days} kun ${hours} soat`;
-  if (hours > 0) return `${hours} soat ${minutes} daqiqa`;
-  return `${minutes} daqiqa`;
+    if (days > 0) return `${days} kun ${hours} soat`;
+    if (hours > 0) return `${hours} soat ${minutes} daqiqa`;
+    return `${minutes} daqiqa`;
 }
 
+/**
+ * Spot foyda/zararni hisoblash
+ */
 function calculateSpotPnL(entryPrice, exitPrice, amount) {
-  const profitPercent = ((exitPrice - entryPrice) / entryPrice) * 100;
-  const profitLoss = (profitPercent / 100) * amount;
-  return { profitLoss, profitPercent };
+    const profitPercent = ((exitPrice - entryPrice) / entryPrice) * 100;
+    const profitLoss = (profitPercent / 100) * amount;
+    return { profitLoss, profitPercent };
 }
 
+/**
+ * Futures foyda/zararni hisoblash
+ */
 function calculateFuturesPnL(entryPrice, exitPrice, amount, leverage, direction) {
-  let profitPercent;
-  if (direction === 'long') {
-    profitPercent = ((exitPrice - entryPrice) / entryPrice) * leverage * 100;
-  } else {
-    profitPercent = ((entryPrice - exitPrice) / entryPrice) * leverage * 100;
-  }
-  const profitLoss = (profitPercent / 100) * amount;
-  return { profitLoss, profitPercent };
+    let profitPercent;
+    if (direction === 'long') {
+        profitPercent = ((exitPrice - entryPrice) / entryPrice) * leverage * 100;
+    } else {
+        profitPercent = ((entryPrice - exitPrice) / entryPrice) * leverage * 100;
+    }
+    const profitLoss = (profitPercent / 100) * amount;
+    return { profitLoss, profitPercent };
 }
 
+/**
+ * SPOT SAVDO SHABLONI
+ */
 function spotTradeTemplate(trade) {
-  const pnlEmoji = getPnLEmoji(trade.profit_loss);
-  const pnlSign = trade.profit_loss >= 0 ? '+' : '';
-  const duration = calculateDuration(trade.entry_date, trade.exit_date);
+    const pnlEmoji = getPnLEmoji(trade.profit_loss);
+    const pnlSign = trade.profit_loss >= 0 ? '+' : '';
+    const duration = calculateDuration(trade.entry_date, trade.exit_date);
 
-  return `
+    return `
 ╔═════════════════════╗
-     📊 *SPOT SAVDO*
+      📊 *SPOT SAVDO*
 ╚═════════════════════╝
 
 🪙 Token: *#${trade.token.toUpperCase()}*
@@ -76,17 +105,20 @@ ${trade.correct_actions ? `✅ *To'g'ri qilganlar:*\n${trade.correct_actions}\n`
 ${trade.mistakes ? `❌ *Xatolar:*\n${trade.mistakes}\n` : ''}
 ${trade.notes ? `📝 *Izoh:*\n${trade.notes}` : ''}
 
-🕐 _${moment().format('DD.MM.YYYY HH:mm')}_
+🕐 _${getUzTime()}_
   `.trim();
 }
 
+/**
+ * FUTURES SAVDO SHABLONI
+ */
 function futuresTradeTemplate(trade) {
-  const pnlEmoji = getPnLEmoji(trade.profit_loss);
-  const pnlSign = trade.profit_loss >= 0 ? '+' : '';
-  const directionEmoji = trade.direction === 'long' ? '🟢 LONG' : '🔴 SHORT';
-  const duration = calculateDuration(trade.entry_date, trade.exit_date);
+    const pnlEmoji = getPnLEmoji(trade.profit_loss);
+    const pnlSign = trade.profit_loss >= 0 ? '+' : '';
+    const directionEmoji = trade.direction === 'long' ? '🟢 LONG' : '🔴 SHORT';
+    const duration = calculateDuration(trade.entry_date, trade.exit_date);
 
-  return `
+    return `
 ╔═════════════════════╗
     ⚡ *FUTURES SAVDO*
 ╚═════════════════════╝
@@ -112,34 +144,35 @@ ${trade.correct_actions ? `✅ *To'g'ri qilganlar:*\n${trade.correct_actions}\n`
 ${trade.mistakes ? `❌ *Xatolar:*\n${trade.mistakes}\n` : ''}
 ${trade.notes ? `📝 *Izoh:*\n${trade.notes}` : ''}
 
-🕐 _${moment().format('DD.MM.YYYY HH:mm')}_
+🕐 _${getUzTime()}_
   `.trim();
 }
 
+/**
+ * KUNLIK TAHLIL SHABLONI
+ */
 function dailyAnalysisTemplate(stats, trades, date) {
-  if (!stats || stats.total === 0) {
-    return `📊 *${date} — Kunlik Tahlil*\n\n😴 Bugun hech qanday savdo amalga oshirilmadi.\n\nErtaga omad! 💪`;
-  }
+    if (!stats || stats.total === 0) {
+        return `📊 *${date} — Kunlik Tahlil*\n\n😴 Bugun hech qanday savdo amalga oshirilmadi.\n\nErtaga omad! 💪`;
+    }
 
-  const pnlEmoji = getPnLEmoji(stats.totalPnL);
-  const winEmoji = stats.winRate >= 70 ? '🏆' : stats.winRate >= 50 ? '👍' : '📚';
+    const pnlEmoji = getPnLEmoji(stats.totalPnL);
+    const winEmoji = stats.winRate >= 70 ? '🏆' : stats.winRate >= 50 ? '👍' : '📚';
 
-  // Soat bo'yicha tahlil
-  const hourStats = {};
-  trades.forEach(t => {
-    const hour = moment(t.entry_date, 'DD.MM.YYYY HH:mm').hour();
-    if (!hourStats[hour]) hourStats[hour] = { count: 0, pnl: 0 };
-    hourStats[hour].count++;
-    hourStats[hour].pnl += t.profit_loss || 0;
-  });
-  const bestHour = Object.entries(hourStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
+    const hourStats = {};
+    trades.forEach(t => {
+        const hour = moment.tz(t.entry_date, 'DD.MM.YYYY HH:mm', 'Asia/Tashkent').hour();
+        if (!hourStats[hour]) hourStats[hour] = { count: 0, pnl: 0 };
+        hourStats[hour].count++;
+        hourStats[hour].pnl += t.profit_loss || 0;
+    });
+    const bestHour = Object.entries(hourStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
 
-  // Prognoz
-  const dailyRate = stats.totalPnL;
-  const monthly = (dailyRate * 22).toFixed(2);
-  const yearly = (dailyRate * 250).toFixed(2);
+    const dailyRate = stats.totalPnL;
+    const monthly = (dailyRate * 22).toFixed(2);
+    const yearly = (dailyRate * 250).toFixed(2);
 
-  return `
+    return `
 📊 *${date} — Kunlik Tahlil*
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -170,29 +203,30 @@ ${stats.topToken ? `🪙 *Eng yaxshi token:* #${stats.topToken.name.toUpperCase(
 
 ${generateAdvice(stats)}
 
-🕐 _Tahlil: ${moment().format('DD.MM.YYYY HH:mm')}_
+🕐 _Tahlil: ${getUzTime()}_
   `.trim();
 }
 
+/**
+ * HAFTALIK TAHLIL SHABLONI
+ */
 function weeklyAnalysisTemplate(stats, trades, weekStr) {
-  if (!stats || stats.total === 0) {
-    return `📊 *Haftalik Tahlil* (${weekStr})\n\n😴 Bu hafta hech qanday savdo amalga oshirilmadi.`;
-  }
+    if (!stats || stats.total === 0) {
+        return `📊 *Haftalik Tahlil* (${weekStr})\n\n😴 Bu hafta hech qanday savdo amalga oshirilmadi.`;
+    }
 
-  // Kun bo'yicha tahlil
-  const dayNames = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba'];
-  const dayStats = {};
-  trades.forEach(t => {
-    const day = moment(t.entry_date, 'DD.MM.YYYY HH:mm').day();
-    if (!dayStats[day]) dayStats[day] = { count: 0, pnl: 0 };
-    dayStats[day].count++;
-    dayStats[day].pnl += t.profit_loss || 0;
-  });
-  const bestDay = Object.entries(dayStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
+    const dayNames = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba'];
+    const dayStats = {};
+    trades.forEach(t => {
+        const day = moment.tz(t.entry_date, 'DD.MM.YYYY HH:mm', 'Asia/Tashkent').day();
+        if (!dayStats[day]) dayStats[day] = { count: 0, pnl: 0 };
+        dayStats[day].count++;
+        dayStats[day].pnl += t.profit_loss || 0;
+    });
+    const bestDay = Object.entries(dayStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
+    const pnlEmoji = getPnLEmoji(stats.totalPnL);
 
-  const pnlEmoji = getPnLEmoji(stats.totalPnL);
-
-  return `
+    return `
 📅 *Haftalik Tahlil* (${weekStr})
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -215,19 +249,22 @@ ${stats.topToken ? `🪙 *Top token:* #${stats.topToken.name.toUpperCase()} (${s
 
 ${generateAdvice(stats)}
 
-🕐 _Tahlil: ${moment().format('DD.MM.YYYY HH:mm')}_
+🕐 _Tahlil: ${getUzTime()}_
   `.trim();
 }
 
+/**
+ * OYLIK TAHLIL SHABLONI
+ */
 function monthlyAnalysisTemplate(stats, trades, monthStr) {
-  if (!stats || stats.total === 0) {
-    return `📊 *Oylik Tahlil* (${monthStr})\n\n😴 Bu oy hech qanday savdo amalga oshirilmadi.`;
-  }
+    if (!stats || stats.total === 0) {
+        return `📊 *Oylik Tahlil* (${monthStr})\n\n😴 Bu oy hech qanday savdo amalga oshirilmadi.`;
+    }
 
-  const pnlEmoji = getPnLEmoji(stats.totalPnL);
-  const roi = stats.totalInvested > 0 ? ((stats.totalPnL / stats.totalInvested) * 100).toFixed(2) : 0;
+    const pnlEmoji = getPnLEmoji(stats.totalPnL);
+    const roi = stats.totalInvested > 0 ? ((stats.totalPnL / stats.totalInvested) * 100).toFixed(2) : 0;
 
-  return `
+    return `
 🗓️ *Oylik Tahlil* (${monthStr})
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -249,30 +286,34 @@ ${stats.topToken ? `🪙 *Top token:* #${stats.topToken.name.toUpperCase()} (${f
 
 ${generateAdvice(stats)}
 
-🕐 _Tahlil: ${moment().format('DD.MM.YYYY HH:mm')}_
+🕐 _Tahlil: ${getUzTime()}_
   `.trim();
 }
 
+/**
+ * BOT MASLAHATLARI GENERATORI
+ */
 function generateAdvice(stats) {
-  const advice = [];
+    const advice = [];
+    if (stats.winRate < 40) {
+        advice.push('⚠️ Win rate past — strategiyangizni qayta ko\'rib chiqing');
+    } else if (stats.winRate >= 70) {
+        advice.push('🌟 Ajoyib win rate! Strategiyangiz ishlayapti');
+    }
 
-  if (stats.winRate < 40) {
-    advice.push('⚠️ Win rate past — strategiyangizni qayta ko\'rib chiqing');
-  } else if (stats.winRate >= 70) {
-    advice.push('🌟 Ajoyib win rate! Strategiyangiz ishlayapti');
-  }
-
-  if (stats.totalPnL < 0) {
-    advice.push(`💡 *Bot maslahati:* Bugun ${Math.abs(stats.losing)} ta zarar savdo bo'ldi. Risk management ni kuchaytiring. Har savdoga kapitalning max 2% xavf qiling.`);
-  } else if (stats.totalPnL > 0) {
-    advice.push(`💡 *Bot maslahati:* ${stats.profitable} ta foydali savdo! Qozongan foydaning bir qismini olib qo'ying va riskni kamaytiring.`);
-  }
-
-  return advice.join('\n');
+    if (stats.totalPnL < 0) {
+        advice.push(`💡 *Bot maslahati:* Bugun ${Math.abs(stats.losing)} ta zarar savdo bo'ldi. Risk management ni kuchaytiring. Har savdoga kapitalning max 2% xavf qiling.`);
+    } else if (stats.totalPnL > 0) {
+        advice.push(`💡 *Bot maslahati:* ${stats.profitable} ta foydali savdo! Qozongan foydaning bir qismini olib qo'ying va riskni kamaytiring.`);
+    }
+    return advice.join('\n');
 }
 
+/**
+ * KUNLIK DARSLAR SHABLONI
+ */
 function quoteTemplate(quote) {
-  return `
+    return `
 🌅 *Kunlik Treyder Darsi*
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -284,15 +325,18 @@ ${quote.text}
   `.trim();
 }
 
+/**
+ * EKSPORT QILISH
+ */
 module.exports = {
-  spotTradeTemplate,
-  futuresTradeTemplate,
-  dailyAnalysisTemplate,
-  weeklyAnalysisTemplate,
-  monthlyAnalysisTemplate,
-  quoteTemplate,
-  calculateSpotPnL,
-  calculateFuturesPnL,
-  formatNumber,
-  formatPnL
+    spotTradeTemplate,
+    futuresTradeTemplate,
+    dailyAnalysisTemplate,
+    weeklyAnalysisTemplate,
+    monthlyAnalysisTemplate,
+    quoteTemplate,
+    calculateSpotPnL,
+    calculateFuturesPnL,
+    formatNumber,
+    formatPnL
 };
