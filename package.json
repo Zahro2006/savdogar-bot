@@ -12,6 +12,7 @@
     "@libsql/client": "^0.3.6",
     "node-cron": "^3.0.3",
     "moment": "^2.30.1",
+    "moment-timezone": "^0.5.45",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
