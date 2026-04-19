@@ -1,32 +1,21 @@
 const { createClient } = require('@libsql/client');
 
-// Turso bulutli DB ulanish
 const db = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN
 });
 
-// ===== JADVALLARNI YARATISH =====
 async function initDB() {
   await db.executeMultiple(`
     CREATE TABLE IF NOT EXISTS trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      direction TEXT,
+      action TEXT NOT NULL,
       token TEXT NOT NULL,
-      leverage REAL DEFAULT 1,
-      entry_price REAL NOT NULL,
-      entry_date TEXT NOT NULL,
-      exit_price REAL NOT NULL,
-      exit_date TEXT NOT NULL,
-      amount REAL NOT NULL,
-      profit_loss REAL,
-      profit_percent REAL,
-      correct_actions TEXT,
-      mistakes TEXT,
-      notes TEXT,
-      channel_message_id INTEGER,
+      price REAL NOT NULL,
+      amount REAL,
+      profit REAL,
+      photo_file_id TEXT,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -37,127 +26,81 @@ async function initDB() {
       PRIMARY KEY (user_id, key)
     );
   `);
-  console.log('✅ Turso DB ulandi va jadvallar tayyor!');
+  console.log('✅ Turso DB ulandi!');
 }
-
-// ===== SAVDO FUNKSIYALARI =====
 
 async function saveTrade(trade) {
   const result = await db.execute({
-    sql: `INSERT INTO trades (user_id, type, direction, token, leverage, entry_price, entry_date, exit_price, exit_date, amount, profit_loss, profit_percent, correct_actions, mistakes, notes)
-          VALUES (:user_id, :type, :direction, :token, :leverage, :entry_price, :entry_date, :exit_price, :exit_date, :amount, :profit_loss, :profit_percent, :correct_actions, :mistakes, :notes)`,
-    args: trade
+    sql: `INSERT INTO trades (user_id, action, token, price, amount, profit, photo_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [trade.user_id, trade.action, trade.token, trade.price, trade.amount || null, trade.profit || null, trade.photo_file_id || null]
   });
   return Number(result.lastInsertRowid);
 }
 
-async function updateTradeMessageId(tradeId, messageId) {
-  await db.execute({
-    sql: 'UPDATE trades SET channel_message_id = ? WHERE id = ?',
-    args: [messageId, tradeId]
-  });
-}
-
 async function getTodayTrades(userId) {
-  const result = await db.execute({
-    sql: `SELECT * FROM trades 
-          WHERE user_id = ? AND DATE(created_at) = DATE('now', 'localtime')
-          ORDER BY created_at DESC`,
+  const r = await db.execute({
+    sql: `SELECT * FROM trades WHERE user_id = ? AND DATE(created_at) = DATE('now','localtime') ORDER BY created_at DESC`,
     args: [userId]
   });
-  return result.rows;
+  return r.rows;
 }
 
 async function getWeekTrades(userId) {
-  const result = await db.execute({
-    sql: `SELECT * FROM trades 
-          WHERE user_id = ? AND created_at >= datetime('now', '-7 days', 'localtime')
-          ORDER BY created_at DESC`,
+  const r = await db.execute({
+    sql: `SELECT * FROM trades WHERE user_id = ? AND created_at >= datetime('now','-7 days','localtime') ORDER BY created_at DESC`,
     args: [userId]
   });
-  return result.rows;
+  return r.rows;
 }
 
 async function getMonthTrades(userId) {
-  const result = await db.execute({
-    sql: `SELECT * FROM trades 
-          WHERE user_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
-          ORDER BY created_at DESC`,
+  const r = await db.execute({
+    sql: `SELECT * FROM trades WHERE user_id = ? AND strftime('%Y-%m',created_at) = strftime('%Y-%m','now','localtime') ORDER BY created_at DESC`,
     args: [userId]
   });
-  return result.rows;
+  return r.rows;
 }
 
 async function getAllTrades(userId) {
-  const result = await db.execute({
-    sql: 'SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC',
+  const r = await db.execute({
+    sql: `SELECT * FROM trades WHERE user_id = ? ORDER BY created_at DESC`,
     args: [userId]
   });
-  return result.rows;
+  return r.rows;
 }
 
 function getTradeStats(trades) {
-  if (!trades || trades.length === 0) return null;
+  const sells = trades.filter(t => t.action === 'sell' && t.profit !== null);
+  if (sells.length === 0) return null;
 
-  const total = trades.length;
-  const profitable = trades.filter(t => t.profit_loss > 0);
-  const losing = trades.filter(t => t.profit_loss < 0);
-  const totalPnL = trades.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
-  const totalInvested = trades.reduce((sum, t) => sum + (t.amount || 0), 0);
-  const bestTrade = trades.reduce((best, t) => (!best || t.profit_loss > best.profit_loss) ? t : best, null);
-  const worstTrade = trades.reduce((worst, t) => (!worst || t.profit_loss < worst.profit_loss) ? t : worst, null);
-  const winRate = total > 0 ? (profitable.length / total * 100).toFixed(1) : 0;
-  const avgPnL = total > 0 ? (totalPnL / total).toFixed(2) : 0;
+  const total = sells.length;
+  const profitable = sells.filter(t => t.profit > 0);
+  const losing = sells.filter(t => t.profit <= 0);
+  const totalPnL = sells.reduce((s, t) => s + t.profit, 0);
+  const best = sells.reduce((b, t) => (!b || t.profit > b.profit) ? t : b, null);
+  const worst = sells.reduce((w, t) => (!w || t.profit < w.profit) ? t : w, null);
+  const winRate = ((profitable.length / total) * 100).toFixed(1);
+  const avgPnL = (totalPnL / total).toFixed(2);
 
   const tokenStats = {};
-  trades.forEach(t => {
+  sells.forEach(t => {
     if (!tokenStats[t.token]) tokenStats[t.token] = { count: 0, pnl: 0 };
     tokenStats[t.token].count++;
-    tokenStats[t.token].pnl += t.profit_loss || 0;
+    tokenStats[t.token].pnl += t.profit;
   });
   const topToken = Object.entries(tokenStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
 
-  return {
-    total,
-    profitable: profitable.length,
-    losing: losing.length,
-    totalPnL,
-    totalInvested,
-    bestTrade,
-    worstTrade,
-    winRate,
-    avgPnL,
-    topToken: topToken ? { name: topToken[0], pnl: topToken[1].pnl, count: topToken[1].count } : null
-  };
+  return { total, profitable: profitable.length, losing: losing.length, totalPnL, best, worst, winRate, avgPnL, topToken: topToken ? { name: topToken[0], ...topToken[1] } : null };
 }
 
-// ===== SOZLAMALAR FUNKSIYALARI =====
-
 async function getSetting(userId, key) {
-  const result = await db.execute({
-    sql: 'SELECT value FROM settings WHERE user_id = ? AND key = ?',
-    args: [userId, key]
-  });
-  return result.rows.length > 0 ? result.rows[0].value : null;
+  const r = await db.execute({ sql: 'SELECT value FROM settings WHERE user_id = ? AND key = ?', args: [userId, key] });
+  return r.rows.length > 0 ? r.rows[0].value : null;
 }
 
 async function setSetting(userId, key, value) {
-  await db.execute({
-    sql: 'INSERT OR REPLACE INTO settings (user_id, key, value) VALUES (?, ?, ?)',
-    args: [userId, key, value]
-  });
+  await db.execute({ sql: 'INSERT OR REPLACE INTO settings (user_id, key, value) VALUES (?, ?, ?)', args: [userId, key, value] });
 }
 
-module.exports = {
-  db,
-  initDB,
-  saveTrade,
-  updateTradeMessageId,
-  getTodayTrades,
-  getWeekTrades,
-  getMonthTrades,
-  getAllTrades,
-  getTradeStats,
-  getSetting,
-  setSetting
-};
+module.exports = { initDB, saveTrade, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting };
