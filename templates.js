@@ -7,7 +7,7 @@ function buyTemplate(data) {
 💵 Narx: $${data.price}
 💰 Miqdor: $${data.amount} USDT
 
-🕐 ${moment().format('DD.MM.YYYY HH:mm')}
+🕐 ${moment().utcOffset('+05:00').format('DD.MM.YYYY HH:mm')}
 #spot #olish #${data.token.toUpperCase()}`;
 }
 
@@ -20,7 +20,7 @@ function sellTemplate(data) {
 💵 Sotish narxi: $${data.price}
 ${profitEmoji} Foyda: ${profitSign}${data.profit} USDT
 
-🕐 ${moment().format('DD.MM.YYYY HH:mm')}
+🕐 ${moment().utcOffset('+05:00').format('DD.MM.YYYY HH:mm')}
 #spot #sotish #${data.token.toUpperCase()}`;
 }
 
@@ -53,7 +53,7 @@ ${pnlEmoji} Natija: ${pnlSign}${stats.totalPnL.toFixed(2)} USDT
 
 📅 Shu tezlikda oyda: ~${monthly > 0 ? '+' : ''}${monthly} USDT
 
-🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
+🕐 ${moment().utcOffset('+05:00').format('DD.MM.YYYY HH:mm')}`;
 }
 
 function weeklyTemplate(stats, trades, weekStr) {
@@ -83,7 +83,7 @@ ${pnlEmoji} Jami: ${pnlSign}${stats.totalPnL.toFixed(2)} USDT
 😬 Worst: #${stats.worst?.token} (${stats.worst?.profit} USDT)
 ${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (+${stats.topToken.pnl.toFixed(2)} USDT)` : ''}
 
-🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
+🕐 ${moment().utcOffset('+05:00').format('DD.MM.YYYY HH:mm')}`;
 }
 
 function monthlyTemplate(stats, trades, monthStr) {
@@ -113,6 +113,7 @@ ${pnlEmoji} Jami: ${pnlSign}${stats.totalPnL.toFixed(2)} USDT
 😬 Worst: #${stats.worst?.token} (${stats.worst?.profit} USDT)
 ${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (${stats.topToken.pnl.toFixed(2)} USDT)` : ''}
 
-🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
+🕐 ${moment().utcOffset('+05:00').format('DD.MM.YYYY HH:mm')}`;
 }
+
 module.exports = { buyTemplate, sellTemplate, dailyTemplate, weeklyTemplate, monthlyTemplate };
