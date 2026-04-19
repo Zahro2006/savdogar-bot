@@ -115,5 +115,4 @@ ${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (${stats.topToken.pn
 
 🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
 }
-
 module.exports = { buyTemplate, sellTemplate, dailyTemplate, weeklyTemplate, monthlyTemplate };
