@@ -14,6 +14,7 @@ async function initDB() {
       token TEXT NOT NULL,
       price REAL NOT NULL,
       amount REAL,
+      allocated REAL,
       profit REAL,
       photo_file_id TEXT,
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
@@ -29,11 +30,20 @@ async function initDB() {
   console.log('✅ Turso DB ulandi!');
 }
 
+// Bu token uchun oldin ajratilgan kapital bormi?
+async function getTokenAllocation(userId, token) {
+  const r = await db.execute({
+    sql: `SELECT allocated FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND allocated IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+    args: [userId, token]
+  });
+  return r.rows.length > 0 ? r.rows[0].allocated : null;
+}
+
 async function saveTrade(trade) {
   const result = await db.execute({
-    sql: `INSERT INTO trades (user_id, action, token, price, amount, profit, photo_file_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    args: [trade.user_id, trade.action, trade.token, trade.price, trade.amount || null, trade.profit || null, trade.photo_file_id || null]
+    sql: `INSERT INTO trades (user_id, action, token, price, amount, allocated, profit, photo_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [trade.user_id, trade.action, trade.token, trade.price, trade.amount || null, trade.allocated || null, trade.profit || null, trade.photo_file_id || null]
   });
   return Number(result.lastInsertRowid);
 }
@@ -103,4 +113,4 @@ async function setSetting(userId, key, value) {
   await db.execute({ sql: 'INSERT OR REPLACE INTO settings (user_id, key, value) VALUES (?, ?, ?)', args: [userId, key, value] });
 }
 
-module.exports = { initDB, saveTrade, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting };
+module.exports = { initDB, saveTrade, getTokenAllocation, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting };
