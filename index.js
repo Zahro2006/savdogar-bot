@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const cron = require('node-cron');
 const moment = require('moment');
 
-const { initDB, saveTrade, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting } = require('./database');
+const { initDB, saveTrade, getTokenAllocation, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting } = require('./database');
 const { buyTemplate, sellTemplate, dailyTemplate, weeklyTemplate, monthlyTemplate } = require('./templates');
 const { getDailyQuote } = require('./quotes');
 
@@ -116,7 +116,24 @@ bot.on('message', async ctx => {
   if (state.step === 'buy_amount') {
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) return ctx.reply('❌ To\'g\'ri miqdor kiriting! Misol: 500');
-    setState(userId, { ...state, step: 'buy_photo', data: { ...state.data, amount } });
+
+    // Bu token uchun oldin kapital ajratilganmi?
+    const prevAllocated = await getTokenAllocation(userId, state.data.token);
+    if (prevAllocated) {
+      // Oldin ajratilgan — yana so'ramasdan davom etamiz
+      setState(userId, { ...state, step: 'buy_photo', data: { ...state.data, amount, allocated: prevAllocated } });
+      return ctx.reply('📸 Screenshot yuboring\n(Birja dan olish tasdiqi)', skipKb);
+    } else {
+      // Birinchi marta — ajratilgan kapitalini so'raymiz
+      setState(userId, { ...state, step: 'buy_allocated', data: { ...state.data, amount } });
+      return ctx.reply(`📦 #${state.data.token} uchun jami qancha kapital ajratdingiz?\n(Misol: 600)\n\nBu faqat bir marta so'raladi.`, backKb);
+    }
+  }
+
+  if (state.step === 'buy_allocated') {
+    const allocated = parseFloat(text);
+    if (isNaN(allocated) || allocated <= 0) return ctx.reply('❌ To\'g\'ri miqdor kiriting! Misol: 600');
+    setState(userId, { ...state, step: 'buy_photo', data: { ...state.data, allocated } });
     return ctx.reply('📸 Screenshot yuboring\n(Birja dan olish tasdiqi)', skipKb);
   }
 
@@ -129,7 +146,7 @@ bot.on('message', async ctx => {
     }
 
     const data = { ...state.data, photo_file_id: photoId };
-    const tradeData = { user_id: userId, action: 'buy', token: data.token, price: data.price, amount: data.amount, photo_file_id: data.photo_file_id };
+    const tradeData = { user_id: userId, action: 'buy', token: data.token, price: data.price, amount: data.amount, allocated: data.allocated || null, photo_file_id: data.photo_file_id };
     const postText = buyTemplate(data);
 
     // Preview ko'rsatish
