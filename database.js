@@ -27,6 +27,15 @@ async function initDB() {
       PRIMARY KEY (user_id, key)
     );
   `);
+
+  // Eski bazada allocated ustuni bo'lmasligi mumkin — qo'shamiz
+  try {
+    await db.execute(`ALTER TABLE trades ADD COLUMN allocated REAL`);
+    console.log('✅ allocated ustuni qo\'shildi');
+  } catch (e) {
+    // Ustun allaqachon bor — xato chiqsa e'tibor bermaymiz
+  }
+
   console.log('✅ Turso DB ulandi!');
 }
 
