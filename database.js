@@ -17,6 +17,7 @@ async function initDB() {
       allocated REAL,
       profit REAL,
       photo_file_id TEXT,
+      status TEXT DEFAULT 'closed',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -28,35 +29,66 @@ async function initDB() {
     );
   `);
 
-  // Eski bazada allocated ustuni bo'lmasligi mumkin — qo'shamiz
-  try {
-    await db.execute(`ALTER TABLE trades ADD COLUMN allocated REAL`);
-    console.log('✅ allocated ustuni qo\'shildi');
-  } catch (e) {
-    // Ustun allaqachon bor — xato chiqsa e'tibor bermaymiz
+  // Eski bazaga yangi ustunlar qo'shamiz (xato bo'lsa e'tiborsiz)
+  const alterCols = ['allocated REAL', 'status TEXT DEFAULT \'closed\''];
+  for (const col of alterCols) {
+    try { await db.execute(`ALTER TABLE trades ADD COLUMN ${col}`); } catch {}
   }
 
   console.log('✅ Turso DB ulandi!');
 }
 
-// Bu token uchun oldin ajratilgan kapital bormi?
+// Savdo saqlash
+async function saveTrade(trade) {
+  const result = await db.execute({
+    sql: `INSERT INTO trades (user_id, action, token, price, amount, allocated, profit, photo_file_id, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      trade.user_id, trade.action, trade.token, trade.price,
+      trade.amount || null, trade.allocated || null,
+      trade.profit || null, trade.photo_file_id || null,
+      trade.status || (trade.action === 'buy' ? 'open' : 'closed')
+    ]
+  });
+  return Number(result.lastInsertRowid);
+}
+
+// Ochiq pozitsiyalarni yopish (sotilganda)
+async function closePosition(tradeId) {
+  await db.execute({
+    sql: `UPDATE trades SET status = 'closed' WHERE id = ?`,
+    args: [tradeId]
+  });
+}
+
+// Bu token uchun ochiq (sotilmagan) xaridlar
+async function getOpenPositions(userId) {
+  const r = await db.execute({
+    sql: `SELECT * FROM trades WHERE user_id = ? AND action = 'buy' AND status = 'open' ORDER BY created_at ASC`,
+    args: [userId]
+  });
+  return r.rows;
+}
+
+// Token uchun jami xarid qilingan summa (ochiq pozitsiyalar)
+async function getTotalBoughtForToken(userId, token) {
+  const r = await db.execute({
+    sql: `SELECT COALESCE(SUM(amount), 0) as total FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND status = 'open'`,
+    args: [userId, token]
+  });
+  return r.rows[0]?.total || 0;
+}
+
+// Bu token uchun ajratilgan kapital (bir marta yozilgan)
 async function getTokenAllocation(userId, token) {
   const r = await db.execute({
-    sql: `SELECT allocated FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND allocated IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+    sql: `SELECT allocated FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND allocated IS NOT NULL ORDER BY created_at ASC LIMIT 1`,
     args: [userId, token]
   });
   return r.rows.length > 0 ? r.rows[0].allocated : null;
 }
 
-async function saveTrade(trade) {
-  const result = await db.execute({
-    sql: `INSERT INTO trades (user_id, action, token, price, amount, allocated, profit, photo_file_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [trade.user_id, trade.action, trade.token, trade.price, trade.amount || null, trade.allocated || null, trade.profit || null, trade.photo_file_id || null]
-  });
-  return Number(result.lastInsertRowid);
-}
-
+// Bugungi savdolar
 async function getTodayTrades(userId) {
   const r = await db.execute({
     sql: `SELECT * FROM trades WHERE user_id = ? AND DATE(created_at) = DATE('now','localtime') ORDER BY created_at DESC`,
@@ -122,4 +154,9 @@ async function setSetting(userId, key, value) {
   await db.execute({ sql: 'INSERT OR REPLACE INTO settings (user_id, key, value) VALUES (?, ?, ?)', args: [userId, key, value] });
 }
 
-module.exports = { initDB, saveTrade, getTokenAllocation, getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades, getTradeStats, getSetting, setSetting };
+module.exports = {
+  initDB, saveTrade, closePosition,
+  getOpenPositions, getTotalBoughtForToken, getTokenAllocation,
+  getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades,
+  getTradeStats, getSetting, setSetting
+};
