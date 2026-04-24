@@ -1,16 +1,23 @@
 const moment = require('moment');
 
+// OLISH posti
 function buyTemplate(data) {
+  const warning = data.overBudget
+    ? `\n⚠️ DIQQAT: Kapitaldan oshib ketdi! +$${data.overBy} ortiqcha!`
+    : '';
   return `🟢 SPOT — OLISH
 
 🪙 Token: #${data.token.toUpperCase()}
 💵 Narx: $${data.price}
-💰 Olingan: $${data.amount} USDT${data.allocated ? `\n📦 Ajratilgan kapital: $${data.allocated} USDT` : ''}
+💰 Bu xaridda: $${data.amount} USDT
+📊 Jami olingan: $${data.totalBought} USDT
+📦 Ajratilgan kapital: $${data.allocated} USDT${warning}
 
 🕐 ${moment().format('DD.MM.YYYY HH:mm')}
 #spot #olish #${data.token.toUpperCase()}`;
 }
 
+// SOTISH posti
 function sellTemplate(data) {
   const profitEmoji = data.profit >= 0 ? '📈' : '📉';
   const profitSign = data.profit >= 0 ? '+' : '';
@@ -18,12 +25,41 @@ function sellTemplate(data) {
 
 🪙 Token: #${data.token.toUpperCase()}
 💵 Sotish narxi: $${data.price}
-${profitEmoji} Foyda: ${profitSign}${data.profit} USDT
+${profitEmoji} Foyda/Zarar: ${profitSign}${data.profit} USDT
 
 🕐 ${moment().format('DD.MM.YYYY HH:mm')}
 #spot #sotish #${data.token.toUpperCase()}`;
 }
 
+// KUTILMOQDA posti (24h so'rovdan keyin)
+function holdingTemplate(data) {
+  const riskMessages = [
+    '⚠️ Narx qaytadi deb kutib o\'tirmang — bu riskli!',
+    '🛡 Kapitalingizni himoya qiling!',
+    '⏰ Vaqt ham resurs — unumli ishlating!',
+    '📉 Stop-loss qo\'ymagan treyder — uxlamagan haydovchi!',
+    '🎯 Plan bo\'lmasa, bozor siz uchun plan qiladi.',
+    '💡 Yo\'qotishni qabul qilish — kuchli treyderning belgisi.',
+    '🔔 Ushlab turish ham qaror, lekin uning narxi bor.',
+  ];
+  const randomRisk = riskMessages[Math.floor(Math.random() * riskMessages.length)];
+
+  return `⏳ KUTILMOQDA
+
+🪙 Token: #${data.token.toUpperCase()}
+💵 Olingan narx: $${data.price}
+💰 Xarid qilingan: $${data.amount} USDT
+📦 Ajratilgan kapital: $${data.allocated || '—'} USDT
+
+📝 Sabab: ${data.reason}
+
+${randomRisk}
+
+🕐 ${moment().format('DD.MM.YYYY HH:mm')}
+#spot #kutilmoqda #${data.token.toUpperCase()}`;
+}
+
+// Tahlil shablonlari
 function dailyTemplate(stats, trades, date) {
   const buyCount = trades.filter(t => t.action === 'buy').length;
   const sellCount = trades.filter(t => t.action === 'sell').length;
@@ -39,7 +75,7 @@ function dailyTemplate(stats, trades, date) {
   return `📊 Kunlik hisobot — ${date}
 
 📥 Xaridlar: ${buyCount} ta
-📤 Sotuvlar: ${sellCount} ta (${stats.total} ta yopildi)
+📤 Sotuvlar: ${sellCount} ta
 
 ✅ Foydali: ${stats.profitable} ta
 ❌ Zararli: ${stats.losing} ta
@@ -81,7 +117,7 @@ ${pnlEmoji} Jami: ${pnlSign}${stats.totalPnL.toFixed(2)} USDT
 
 🏆 Best: #${stats.best?.token} (+${stats.best?.profit} USDT)
 😬 Worst: #${stats.worst?.token} (${stats.worst?.profit} USDT)
-${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (+${stats.topToken.pnl.toFixed(2)} USDT)` : ''}
+${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (${stats.topToken.pnl.toFixed(2)} USDT)` : ''}
 
 🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
 }
@@ -116,4 +152,4 @@ ${stats.topToken ? `🥇 Top token: #${stats.topToken.name} (${stats.topToken.pn
 🕐 ${moment().format('DD.MM.YYYY HH:mm')}`;
 }
 
-module.exports = { buyTemplate, sellTemplate, dailyTemplate, weeklyTemplate, monthlyTemplate };
+module.exports = { buyTemplate, sellTemplate, holdingTemplate, dailyTemplate, weeklyTemplate, monthlyTemplate };
