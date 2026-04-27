@@ -1,11 +1,13 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const cron = require('node-cron');
-const moment = require('moment');
+const moment = require('moment-timezone');
+const TZ = 'Asia/Tashkent';
 
 const {
-  initDB, saveTrade, closePosition,
-  getOpenPositions, getTotalBoughtForToken, getTokenAllocation,
+  db, initDB, saveTrade,
+  getOpenPositions, getOpenPositionsGrouped,
+  closeTokenPositions, getTokenAllocation, getTotalBoughtForToken,
   getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades,
   getTradeStats, getSetting, setSetting
 } = require('./database');
@@ -26,13 +28,13 @@ const mainMenu = Markup.keyboard([
 const tradeTypeKb = Markup.keyboard([['🟢 OLISH', '🔴 SOTISH'], ['🔙 Orqaga']]).resize();
 const backKb = Markup.keyboard([['🔙 Orqaga']]).resize();
 const skipKb = Markup.keyboard([['⏭ O\'tkazish', '🔙 Orqaga']]).resize();
+const confirmKb = Markup.keyboard([['✅ Tasdiqlash', '❌ Bekor qilish']]).resize();
 const analysisKb = Markup.keyboard([
   ['📅 Bugungi', '📆 Haftalik'],
   ['🗓 Oylik', '📊 Umumiy'],
   ['🔙 Orqaga']
 ]).resize();
 
-// ===== HOLAT =====
 function setState(id, s) { userStates.set(id, s); }
 function getState(id) { return userStates.get(id) || {}; }
 function clearState(id) { userStates.delete(id); }
@@ -58,7 +60,18 @@ async function postToChannel(ctx, userId, text, photoId) {
 async function postAnalysis(ctx, userId, text) {
   const ch = await getSetting(userId, 'channel');
   if (!ch) return;
-  try { await ctx.telegram.sendMessage(ch, text); } catch (e) { console.error(e.message); }
+  try { await ctx.telegram.sendMessage(ch, text); } catch {}
+}
+
+// ===== OCHIQ POZITSIYALAR RO'YXATI KLAVIATURASI =====
+function buildPositionsKeyboard(positions) {
+  // positions — guruhlangan (token bo'yicha)
+  const rows = positions.map(p => {
+    const count = p.buy_count > 1 ? ` (${p.buy_count}x xarid)` : '';
+    return [`${p.token} — $${Number(p.total_amount).toFixed(0)} USDT${count}`];
+  });
+  rows.push(['🔙 Orqaga']);
+  return Markup.keyboard(rows).resize();
 }
 
 // ===== 24 SOATLIK TEKSHIRUV =====
@@ -67,69 +80,64 @@ async function checkOpenPositions(telegramId) {
   if (positions.length === 0) return;
 
   for (const pos of positions) {
-    const openedAgo = moment().diff(moment(pos.created_at), 'hours');
-    if (openedAgo < 23) continue; // 24 soat o'tmagan
+    const openedAgo = moment().tz(TZ).diff(moment(pos.created_at), 'hours');
+    if (openedAgo < 23) continue;
 
     try {
       await bot.telegram.sendMessage(
         telegramId,
         `🔔 Ochiq pozitsiya tekshiruvi\n\n` +
         `🪙 Token: #${pos.token}\n` +
-        `💵 Olingan narx: $${pos.price}\n` +
+        `💵 Narx: $${pos.price}\n` +
         `💰 Miqdor: $${pos.amount} USDT\n` +
         `📅 Olingan: ${pos.created_at?.substring(0, 16)}\n\n` +
         `Bu tokenni sotdingizmi?`,
         Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Ha, sotdim', `sold_${pos.id}`)],
-          [Markup.button.callback('❌ Yo\'q, hali sotmadim', `holding_${pos.id}`)]
+          [Markup.button.callback('✅ Ha, sotdim', `sold_${pos.id}_${pos.token}`)],
+          [Markup.button.callback('❌ Yo\'q, hali', `holding_${pos.id}_${pos.token}`)]
         ])
       );
-    } catch (e) {
-      console.error('Pozitsiya tekshiruvida xato:', e.message);
-    }
+    } catch (e) { console.error('24h xato:', e.message); }
   }
 }
 
-// ===== CALLBACK QUERY (inline tugmalar) =====
+// ===== CALLBACK (inline tugmalar) =====
 bot.on('callback_query', async ctx => {
   const userId = ctx.from.id;
   const data = ctx.callbackQuery.data;
-
   await ctx.answerCbQuery();
 
-  // HA, sotdim
   if (data.startsWith('sold_')) {
-    const tradeId = parseInt(data.replace('sold_', ''));
-    setState(userId, { step: 'notify_sell_profit', tradeId });
-    await ctx.reply(
-      '💰 Qancha foyda/zarar bo\'ldi? (USDT)\nMisol: +45.5 yoki -12',
-      backKb
-    );
+    const parts = data.split('_');
+    const tradeId = parseInt(parts[1]);
+    const token = parts.slice(2).join('_');
+    setState(userId, { step: 'notify_sell_profit', tradeId, token });
+    return ctx.reply(`💰 #${token} dan qancha foyda/zarar bo'ldi? (USDT)\nMisol: 45.5 yoki -12`, backKb);
   }
 
-  // YO'Q, hali sotmadim
   if (data.startsWith('holding_')) {
-    const tradeId = parseInt(data.replace('holding_', ''));
-    setState(userId, { step: 'notify_holding_reason', tradeId });
-
-    const reasons = [
-      'Hali TP ga yetmadi', 'Yana xarid qilmoqchiman', 'Uzoq muddatli ushlayman', 'Boshqa sabab'
-    ];
-    await ctx.reply(
-      '📝 Nega sotmadingiz?',
-      Markup.keyboard([...reasons.map(r => [r]), ['🔙 Orqaga']]).resize()
+    const parts = data.split('_');
+    const tradeId = parseInt(parts[1]);
+    const token = parts.slice(2).join('_');
+    setState(userId, { step: 'notify_holding_reason', tradeId, token });
+    return ctx.reply(
+      `📝 #${token} ni nima uchun sotmadingiz?`,
+      Markup.keyboard([
+        ['Hali TP ga yetmadi'], ['Yana xarid qilmoqchiman'],
+        ['Uzoq muddatli ushlayman'], ['Boshqa sabab'],
+        ['🔙 Orqaga']
+      ]).resize()
     );
   }
 });
 
-// ===== START =====
+// ===== /start =====
 bot.start(async ctx => {
   clearState(ctx.from.id);
   await setSetting(ctx.from.id, 'chat_id', ctx.from.id.toString());
   await ctx.replyWithMarkdown(
     `👋 Salom, *${ctx.from.first_name}*!\n\n` +
-    `📒 Spot savdolaringizni kuzatib, kanalingizga post qiladi.\n\n` +
-    `Boshlash uchun 👇`,
+    `📒 Spot savdolaringizni kuzatib, kanalingizga post qiladi.\n\nBoshlash uchun 👇`,
     mainMenu
   );
 });
@@ -148,7 +156,6 @@ bot.on('message', async ctx => {
 
   // ========== 24H TEKSHIRUV JAVOBLARI ==========
 
-  // Sotdim — foyda so'rash
   if (state.step === 'notify_sell_profit') {
     const profit = parseFloat(text.replace('+', ''));
     if (isNaN(profit)) return ctx.reply('❌ To\'g\'ri kiriting! Misol: 45.5 yoki -12');
@@ -161,28 +168,24 @@ bot.on('message', async ctx => {
     if (photo) photoId = photo[photo.length - 1].file_id;
     else if (text !== '⏭ O\'tkazish') return ctx.reply('📸 Rasm yuboring yoki o\'tkazing', skipKb);
 
-    // Ochiq pozitsiyani topamiz
     const positions = await getOpenPositions(userId);
     const pos = positions.find(p => p.id === state.tradeId);
     if (!pos) { clearState(userId); return ctx.reply('❌ Pozitsiya topilmadi.', mainMenu); }
 
-    const tradeData = { user_id: userId, action: 'sell', token: pos.token, price: pos.price, profit: state.profit, photo_file_id: photoId, status: 'closed' };
-    await saveTrade(tradeData);
-    await closePosition(state.tradeId);
+    await saveTrade({ user_id: userId, action: 'sell', token: pos.token, price: pos.price, profit: state.profit, photo_file_id: photoId, status: 'closed' });
+    await closeTokenPositions(userId, pos.token);
 
     const postText = sellTemplate({ token: pos.token, price: pos.price, profit: state.profit });
     await postToChannel(ctx, userId, postText, photoId);
-
     clearState(userId);
     return ctx.reply('✅ Sotish qayd etildi va kanalga yuborildi!', mainMenu);
   }
 
-  // Sotmadim — sabab
   if (state.step === 'notify_holding_reason') {
     setState(userId, { ...state, step: 'notify_holding_photo', reason: text });
     return ctx.reply(
       '📸 Hozirgi holat screenshotini yuboring (ixtiyoriy)\n\n' +
-      '⚠️ Eslatma: Narx qaytadi deb uzoq kutish katta risk! Kapitalingizni himoya qiling.',
+      '⚠️ Narq qaytadi deb uzoq kutish katta risk! Kapitalingizni himoya qiling.',
       skipKb
     );
   }
@@ -196,12 +199,12 @@ bot.on('message', async ctx => {
     const pos = positions.find(p => p.id === state.tradeId);
     if (!pos) { clearState(userId); return ctx.reply('❌ Pozitsiya topilmadi.', mainMenu); }
 
+    const totalBought = await getTotalBoughtForToken(userId, pos.token);
     const postText = holdingTemplate({
-      token: pos.token, price: pos.price, amount: pos.amount,
-      allocated: pos.allocated, reason: state.reason
+      token: pos.token, price: pos.price,
+      totalBought, allocated: pos.allocated, reason: state.reason
     });
     await postToChannel(ctx, userId, postText, photoId);
-
     clearState(userId);
     return ctx.reply('✅ "Kutilmoqda" post kanalga yuborildi!\n\n🛡 Kapitalingizni himoya qiling!', mainMenu);
   }
@@ -214,15 +217,54 @@ bot.on('message', async ctx => {
 
   // ===== OLISH FLOW =====
   if (text === '🟢 OLISH' && state.step === 'select_type') {
-    setState(userId, { step: 'buy_token', data: {} });
-    return ctx.reply('🪙 Qaysi tokenni oldingiz?\n(Misol: BTC, ETH, SOL)', backKb);
+    // Mavjud ochiq pozitsiyalarni ko'rsatamiz
+    const openPositions = await getOpenPositionsGrouped(userId);
+
+    if (openPositions.length > 0) {
+      // Eski tokenlar + yangi token
+      const rows = openPositions.map(p => {
+        const count = p.buy_count > 1 ? ` (${p.buy_count}x)` : '';
+        return [`${p.token} — jami $${Number(p.total_amount).toFixed(0)}${count}`];
+      });
+      rows.push(['➕ Yangi token']);
+      rows.push(['🔙 Orqaga']);
+
+      setState(userId, { step: 'buy_select_token', openPositions });
+      return ctx.reply(
+        '🟢 OLISH\n\nMavjud tokendan qo\'shish yoki yangi token:',
+        Markup.keyboard(rows).resize()
+      );
+    } else {
+      // Hech qanday ochiq pozitsiya yo'q — to'g'ri token so'rab ketamiz
+      setState(userId, { step: 'buy_token', data: {} });
+      return ctx.reply('🪙 Qaysi tokenni oldingiz?\n(Misol: BTC, ETH, SOL)', backKb);
+    }
   }
 
+  // Mavjud tokendan tanlash yoki yangi
+  if (state.step === 'buy_select_token') {
+    if (text === '➕ Yangi token') {
+      setState(userId, { step: 'buy_token', data: {} });
+      return ctx.reply('🪙 Yangi token nomini kiriting:\n(Misol: BTC, ETH, SOL)', backKb);
+    }
+
+    // Mavjud tokenni tanladik
+    const token = text.split(' — ')[0]?.trim();
+    const pos = state.openPositions?.find(p => p.token === token);
+    if (!pos) return ctx.reply('Ro\'yxatdan tanlang yoki "Yangi token" bosing');
+
+    setState(userId, { step: 'buy_price', data: { token, existingToken: true } });
+    return ctx.reply(`💵 #${token} ni qancha narxda oldingiz? ($)`, backKb);
+  }
+
+  // Yangi token nomi
   if (state.step === 'buy_token') {
-    setState(userId, { ...state, step: 'buy_price', data: { token: text.trim().toUpperCase() } });
-    return ctx.reply(`💵 #${text.toUpperCase()} ni qancha narxda oldingiz? ($)`, backKb);
+    const token = text.trim().toUpperCase();
+    setState(userId, { ...state, step: 'buy_price', data: { token } });
+    return ctx.reply(`💵 #${token} ni qancha narxda oldingiz? ($)`, backKb);
   }
 
+  // Narx
   if (state.step === 'buy_price') {
     const price = parseFloat(text);
     if (isNaN(price) || price <= 0) return ctx.reply('❌ To\'g\'ri narx kiriting!');
@@ -230,64 +272,58 @@ bot.on('message', async ctx => {
     return ctx.reply('💰 Bu safar necha $ lik oldingiz? (USDT)\nMisol: 150', backKb);
   }
 
+  // Miqdor
   if (state.step === 'buy_amount') {
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) return ctx.reply('❌ To\'g\'ri miqdor kiriting!');
 
-    const prevAllocated = await getTokenAllocation(userId, state.data.token);
+    const { token } = state.data;
+    const prevAllocated = await getTokenAllocation(userId, token);
 
     if (prevAllocated) {
-      // Allaqachon kapital belgilangan — validatsiya
-      const alreadyBought = await getTotalBoughtForToken(userId, state.data.token);
+      // Kapital allaqachon belgilangan — validatsiya
+      const alreadyBought = await getTotalBoughtForToken(userId, token);
       const newTotal = alreadyBought + amount;
 
       if (newTotal > prevAllocated) {
         const over = (newTotal - prevAllocated).toFixed(2);
+        setState(userId, { ...state, step: 'buy_fomo_confirm', data: { ...state.data, amount, allocated: prevAllocated, totalBought: newTotal, overBudget: true, overBy: over } });
         return ctx.reply(
-          `🚫 DIQQAT! FOMOGA BERILMANG!\n\n` +
+          `🚫 FOMOGA BERILMANG!\n\n` +
           `📦 Ajratilgan kapital: $${prevAllocated} USDT\n` +
           `📊 Allaqachon olingan: $${alreadyBought} USDT\n` +
-          `🆕 Siz kiritmoqchi: $${amount} USDT\n` +
+          `🆕 Siz kiritayotgan: $${amount} USDT\n` +
           `❌ Ortiqcha: $${over} USDT\n\n` +
-          `⚠️ Bu xarid ajratilgan kapitaldan oshadi!\n` +
-          `💡 Belgilangan kapitaldan oshmaslikni tavsiya qilamiz.\n\n` +
-          `Baribir davom etishni xohlaysizmi?`,
-          Markup.keyboard([
-            ['⚠️ Ha, baribir davom etaman'],
-            ['❌ Bekor qilish']
-          ]).resize()
+          `⚠️ Belgilangan kapitaldan oshib ketadi!\nBaribir davom etasizmi?`,
+          Markup.keyboard([['⚠️ Ha, davom etaman'], ['❌ Bekor qilish']]).resize()
         );
       }
 
       setState(userId, { ...state, step: 'buy_photo', data: { ...state.data, amount, allocated: prevAllocated, totalBought: newTotal } });
       return ctx.reply('📸 Screenshot yuboring (ixtiyoriy)', skipKb);
+
     } else {
       // Birinchi marta — kapital so'raymiz
       setState(userId, { ...state, step: 'buy_allocated', data: { ...state.data, amount } });
       return ctx.reply(
-        `📦 #${state.data.token} uchun jami qancha kapital ajratdingiz?\n` +
-        `(Misol: 450)\n\n` +
-        `💡 Bu bir marta so'raladi. Keyingi xaridlarda avtomatik tekshiriladi.`,
+        `📦 #${token} uchun jami qancha kapital ajratdingiz?\n(Misol: 450)\n\n` +
+        `💡 Faqat bir marta so'raladi. Keyingi xaridlarda avtomatik tekshiriladi.`,
         backKb
       );
     }
   }
 
-  // Kapital kiritilgandan keyin ortiqcha xarid tasdiqi
-  if (state.step === 'buy_amount' || (text === '⚠️ Ha, baribir davom etaman' && state.step === 'buy_photo')) {
-    // fomo tasdiqlash
+  // FOMO tasdiq
+  if (state.step === 'buy_fomo_confirm') {
+    if (text === '⚠️ Ha, davom etaman') {
+      setState(userId, { ...state, step: 'buy_photo' });
+      return ctx.reply('📸 Screenshot yuboring (ixtiyoriy)\n\n⚠️ Kapitalingizni himoya qiling!', skipKb);
+    }
+    if (text === '❌ Bekor qilish') { clearState(userId); return ctx.reply('❌ Bekor qilindi.', mainMenu); }
+    return;
   }
 
-  if (text === '⚠️ Ha, baribir davom etaman') {
-    setState(userId, { ...state, step: 'buy_photo' });
-    return ctx.reply('📸 Screenshot yuboring (ixtiyoriy)\n\n⚠️ Kapitalingizni himoya qiling!', skipKb);
-  }
-
-  if (text === '❌ Bekor qilish' && !state.step?.includes('confirm')) {
-    clearState(userId);
-    return ctx.reply('❌ Bekor qilindi.', mainMenu);
-  }
-
+  // Kapital
   if (state.step === 'buy_allocated') {
     const allocated = parseFloat(text);
     if (isNaN(allocated) || allocated <= 0) return ctx.reply('❌ To\'g\'ri miqdor kiriting!');
@@ -296,9 +332,8 @@ bot.on('message', async ctx => {
     if (amount > allocated) {
       return ctx.reply(
         `🚫 FOMOGA BERILMANG!\n\n` +
-        `Siz $${amount} xarid qilmoqchisiz, lekin atigi $${allocated} kapital ajratdingiz!\n\n` +
-        `⚠️ Kapital xariddan ko'p bo'lishi kerak.\n` +
-        `Ajratilgan kapital miqdorini qayta kiriting:`,
+        `Siz $${amount} xarid qilmoqchisiz lekin faqat $${allocated} kapital ajratdingiz!\n\n` +
+        `Kapital xariddan katta bo'lishi kerak.\nQayta kiriting:`,
         backKb
       );
     }
@@ -307,26 +342,19 @@ bot.on('message', async ctx => {
     return ctx.reply('📸 Screenshot yuboring (ixtiyoriy)', skipKb);
   }
 
+  // Screenshot
   if (state.step === 'buy_photo') {
     let photoId = null;
     if (photo) photoId = photo[photo.length - 1].file_id;
     else if (text !== '⏭ O\'tkazish') return ctx.reply('📸 Rasm yuboring yoki o\'tkazib yuboring', skipKb);
 
-    const data = { ...state.data, photo_file_id: photoId };
-    const postText = buyTemplate(data);
-    const tradeData = {
-      user_id: userId, action: 'buy', token: data.token,
-      price: data.price, amount: data.amount, allocated: data.allocated,
-      photo_file_id: data.photo_file_id, status: 'open'
-    };
+    const d = { ...state.data, photo_file_id: photoId };
+    const postText = buyTemplate(d);
+    const tradeData = { user_id: userId, action: 'buy', token: d.token, price: d.price, amount: d.amount, allocated: d.allocated, photo_file_id: d.photo_file_id, status: 'open' };
 
     setState(userId, { step: 'buy_confirm', data: tradeData, postText });
-    const confirmKb = Markup.keyboard([['✅ Tasdiqlash', '❌ Bekor qilish']]).resize();
-    if (photoId) {
-      await ctx.replyWithPhoto(photoId, { caption: '👀 Preview:\n\n' + postText });
-    } else {
-      await ctx.reply('👀 Preview:\n\n' + postText);
-    }
+    if (photoId) await ctx.replyWithPhoto(photoId, { caption: '👀 Preview:\n\n' + postText });
+    else await ctx.reply('👀 Preview:\n\n' + postText);
     return ctx.reply('Kanalga yuboraymi?', confirmKb);
   }
 
@@ -344,27 +372,20 @@ bot.on('message', async ctx => {
 
   // ===== SOTISH FLOW =====
   if (text === '🔴 SOTISH' && state.step === 'select_type') {
-    // Ochiq pozitsiyalarni ko'rsatamiz
-    const positions = await getOpenPositions(userId);
+    const positions = await getOpenPositionsGrouped(userId);
     if (positions.length === 0) {
       return ctx.reply('📭 Ochiq pozitsiya yo\'q.\nAvval "OLISH" orqali savdo kiriting.', mainMenu);
     }
-
-    const kb = Markup.keyboard([
-      ...positions.map(p => [`${p.token} — $${p.price} (${p.amount} USDT)`]),
-      ['🔙 Orqaga']
-    ]).resize();
-
     setState(userId, { step: 'sell_select', positions });
-    return ctx.reply('🔴 Qaysi tokenni sottingiz?\nRo\'yxatdan tanlang:', kb);
+    return ctx.reply('🔴 Qaysi tokenni sottingiz?', buildPositionsKeyboard(positions));
   }
 
   if (state.step === 'sell_select') {
-    // Tokenni aniqlaymiz
     const token = text.split(' — ')[0]?.trim();
     const pos = state.positions?.find(p => p.token === token);
     if (!pos) return ctx.reply('Ro\'yxatdan tanlang!');
-    setState(userId, { step: 'sell_price', selectedPos: pos });
+
+    setState(userId, { step: 'sell_price', selectedToken: token, selectedPos: pos });
     return ctx.reply(`💵 #${token} ni qancha narxda sottingiz? ($)`, backKb);
   }
 
@@ -372,7 +393,7 @@ bot.on('message', async ctx => {
     const price = parseFloat(text);
     if (isNaN(price) || price <= 0) return ctx.reply('❌ To\'g\'ri narx kiriting!');
     setState(userId, { ...state, step: 'sell_profit', data: { price } });
-    return ctx.reply('💰 Foyda/Zarar miqdori? (USDT)\nMisol: +45.5 yoki -12', backKb);
+    return ctx.reply('💰 Foyda/Zarar miqdori? (USDT)\nMisol: 45.5 yoki -12', backKb);
   }
 
   if (state.step === 'sell_profit') {
@@ -387,25 +408,22 @@ bot.on('message', async ctx => {
     if (photo) photoId = photo[photo.length - 1].file_id;
     else if (text !== '⏭ O\'tkazish') return ctx.reply('📸 Rasm yuboring yoki o\'tkazib yuboring', skipKb);
 
+    const token = state.selectedToken;
     const pos = state.selectedPos;
-    const data = { ...state.data, photo_file_id: photoId };
-    const tradeData = { user_id: userId, action: 'sell', token: pos.token, price: data.price, profit: data.profit, photo_file_id: data.photo_file_id, status: 'closed' };
-    const postText = sellTemplate({ token: pos.token, price: data.price, profit: data.profit });
+    const d = state.data;
+    const tradeData = { user_id: userId, action: 'sell', token, price: d.price, profit: d.profit, photo_file_id: photoId, status: 'closed' };
+    const postText = sellTemplate({ token, price: d.price, profit: d.profit });
 
-    setState(userId, { step: 'sell_confirm', data: tradeData, postText, posId: pos.id });
-    const confirmKb = Markup.keyboard([['✅ Tasdiqlash', '❌ Bekor qilish']]).resize();
-    if (photoId) {
-      await ctx.replyWithPhoto(photoId, { caption: '👀 Preview:\n\n' + postText });
-    } else {
-      await ctx.reply('👀 Preview:\n\n' + postText);
-    }
+    setState(userId, { step: 'sell_confirm', data: tradeData, postText, token });
+    if (photoId) await ctx.replyWithPhoto(photoId, { caption: '👀 Preview:\n\n' + postText });
+    else await ctx.reply('👀 Preview:\n\n' + postText);
     return ctx.reply('Kanalga yuboraymi?', confirmKb);
   }
 
   if (state.step === 'sell_confirm') {
     if (text === '✅ Tasdiqlash') {
       await saveTrade(state.data);
-      await closePosition(state.posId);
+      await closeTokenPositions(userId, state.token);
       const msgId = await postToChannel(ctx, userId, state.postText, state.data.photo_file_id);
       clearState(userId);
       const ch = await getSetting(userId, 'channel');
@@ -420,7 +438,7 @@ bot.on('message', async ctx => {
     const ch = await getSetting(userId, 'channel');
     setState(userId, { step: 'awaiting_channel' });
     return ctx.reply(
-      `📢 Kanal sozlamalari\n\nHozirgi kanal: ${ch ? ch : 'Ulanmagan ❌'}\n\nKanal username yuboring:\nMisol: @mening_kanal\n\nMuhim: Bot kanalda ADMIN bolishi kerak!`,
+      `📢 Kanal sozlamalari\n\nHozirgi kanal: ${ch || 'Ulanmagan ❌'}\n\nKanal username yuboring:\nMisol: @mening_kanal\n\nMuhim: Bot kanalda ADMIN bolishi kerak!`,
       backKb
     );
   }
@@ -444,46 +462,34 @@ bot.on('message', async ctx => {
 
   if (text === '📅 Bugungi') {
     const trades = await getTodayTrades(userId);
-    const stats = getTradeStats(trades);
-    const msg = dailyTemplate(stats, trades, moment().format('DD.MM.YYYY'));
-    await ctx.reply(msg);
-    await postAnalysis(ctx, userId, msg);
-    return;
+    const msg = dailyTemplate(getTradeStats(trades), trades, moment().tz(TZ).format('DD.MM.YYYY'));
+    await ctx.reply(msg); await postAnalysis(ctx, userId, msg); return;
   }
-
   if (text === '📆 Haftalik') {
     const trades = await getWeekTrades(userId);
-    const stats = getTradeStats(trades);
-    const weekStr = `${moment().subtract(6, 'days').format('DD.MM')} - ${moment().format('DD.MM.YYYY')}`;
-    const msg = weeklyTemplate(stats, trades, weekStr);
-    await ctx.reply(msg);
-    await postAnalysis(ctx, userId, msg);
-    return;
+    const weekStr = `${moment().tz(TZ).subtract(6, 'days').format('DD.MM')} - ${moment().tz(TZ).format('DD.MM.YYYY')}`;
+    const msg = weeklyTemplate(getTradeStats(trades), trades, weekStr);
+    await ctx.reply(msg); await postAnalysis(ctx, userId, msg); return;
   }
-
   if (text === '🗓 Oylik') {
     const trades = await getMonthTrades(userId);
-    const stats = getTradeStats(trades);
-    const msg = monthlyTemplate(stats, trades, moment().format('MMMM YYYY'));
-    await ctx.reply(msg);
-    await postAnalysis(ctx, userId, msg);
-    return;
+    const msg = monthlyTemplate(getTradeStats(trades), trades, moment().tz(TZ).format('MMMM YYYY'));
+    await ctx.reply(msg); await postAnalysis(ctx, userId, msg); return;
   }
-
   if (text === '📊 Umumiy') {
     const trades = await getAllTrades(userId);
     const stats = getTradeStats(trades);
     const buyCount = trades.filter(t => t.action === 'buy').length;
     const sellCount = trades.filter(t => t.action === 'sell').length;
     if (!stats) return ctx.reply(`📊 Umumiy\n\n📥 Xaridlar: ${buyCount} ta\n📤 Sotuvlar: ${sellCount} ta\n\n💤 Hali yopilgan savdo yo'q.`);
-
     const pnlSign = stats.totalPnL >= 0 ? '+' : '';
     return ctx.reply(
       `📊 Umumiy statistika\n\n📥 Xaridlar: ${buyCount} ta\n📤 Sotuvlar: ${sellCount} ta\n\n` +
       `✅ Foydali: ${stats.profitable} ta\n❌ Zararli: ${stats.losing} ta\n🎯 Win rate: ${stats.winRate}%\n\n` +
       `💰 Jami foyda: ${pnlSign}${stats.totalPnL.toFixed(2)} USDT\n📈 O'rtacha: ${stats.avgPnL > 0 ? '+' : ''}${stats.avgPnL} USDT\n\n` +
-      `🏆 Best: #${stats.best?.token} (+${stats.best?.profit} USDT)\n😬 Worst: #${stats.worst?.token} (${stats.worst?.profit} USDT)\n` +
-      (stats.topToken ? `🥇 Top token: #${stats.topToken.name} (${stats.topToken.pnl.toFixed(2)} USDT)` : '')
+      `🏆 Best: #${stats.best?.token} (+${stats.best?.profit} USDT)\n` +
+      `😬 Worst: #${stats.worst?.token} (${stats.worst?.profit} USDT)\n` +
+      (stats.topToken ? `🥇 Top: #${stats.topToken.name} (${stats.topToken.pnl.toFixed(2)} USDT)` : '')
     );
   }
 
@@ -495,8 +501,8 @@ bot.on('message', async ctx => {
     let msg = `📋 So'nggi ${recent.length} ta savdo:\n\n`;
     recent.forEach((t, i) => {
       const emoji = t.action === 'buy' ? '🟢' : '🔴';
-      msg += `${i + 1}. ${emoji} #${t.token} — ${t.action === 'buy' ? 'Olish' : 'Sotish'} $${t.price}`;
-      if (t.profit !== null) msg += ` (${t.profit > 0 ? '+' : ''}${t.profit} USDT)`;
+      msg += `${i + 1}. ${emoji} #${t.token} $${t.price}`;
+      if (t.profit !== null) msg += ` → ${Number(t.profit) > 0 ? '+' : ''}${t.profit} USDT`;
       msg += `\n   📅 ${t.created_at?.substring(0, 16)}\n\n`;
     });
     return ctx.reply(msg);
@@ -509,25 +515,14 @@ bot.on('message', async ctx => {
   }
 });
 
-// ===== CRON JOBS =====
-// Har 24 soatda ochiq pozitsiyalarni tekshirish — har kuni 10:00
+// ===== CRON =====
 cron.schedule('0 10 * * *', async () => {
   console.log('⏰ Ochiq pozitsiyalar tekshirilmoqda...');
-  // Barcha foydalanuvchilarni settings dan topamiz
   try {
-    const { db } = require('./database');
     const r = await db.execute(`SELECT DISTINCT user_id FROM settings WHERE key = 'chat_id'`);
-    for (const row of r.rows) {
-      await checkOpenPositions(Number(row.user_id));
-    }
+    for (const row of r.rows) await checkOpenPositions(Number(row.user_id));
   } catch (e) { console.error('Cron xato:', e.message); }
-});
-
-// Kunlik tahlil 23:00
-cron.schedule('0 23 * * *', () => console.log('Kunlik tahlil vaqti...'));
-
-// Treyder darsi 08:00
-cron.schedule('0 8 * * *', () => console.log('Bugungi dars vaqti...'));
+}, { timezone: 'Asia/Tashkent' });
 
 bot.catch((err, ctx) => {
   console.error('Bot xatosi:', err);
