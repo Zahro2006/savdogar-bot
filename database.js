@@ -17,7 +17,7 @@ async function initDB() {
       allocated REAL,
       profit REAL,
       photo_file_id TEXT,
-      status TEXT DEFAULT 'closed',
+      status TEXT DEFAULT 'open',
       created_at TEXT DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -29,16 +29,14 @@ async function initDB() {
     );
   `);
 
-  // Eski bazaga yangi ustunlar qo'shamiz (xato bo'lsa e'tiborsiz)
-  const alterCols = ['allocated REAL', 'status TEXT DEFAULT \'closed\''];
-  for (const col of alterCols) {
+  // Eski bazaga yangi ustunlar
+  for (const col of ['allocated REAL', "status TEXT DEFAULT 'open'"]) {
     try { await db.execute(`ALTER TABLE trades ADD COLUMN ${col}`); } catch {}
   }
 
   console.log('✅ Turso DB ulandi!');
 }
 
-// Savdo saqlash
 async function saveTrade(trade) {
   const result = await db.execute({
     sql: `INSERT INTO trades (user_id, action, token, price, amount, allocated, profit, photo_file_id, status)
@@ -53,15 +51,28 @@ async function saveTrade(trade) {
   return Number(result.lastInsertRowid);
 }
 
-// Ochiq pozitsiyalarni yopish (sotilganda)
-async function closePosition(tradeId) {
-  await db.execute({
-    sql: `UPDATE trades SET status = 'closed' WHERE id = ?`,
-    args: [tradeId]
+// Ochiq pozitsiyalar — TOKEN bo'yicha GURUHLANGAN
+// Har bir token uchun: jami amount, birinchi narx, ajratilgan kapital
+async function getOpenPositionsGrouped(userId) {
+  const r = await db.execute({
+    sql: `SELECT 
+            token,
+            COUNT(*) as buy_count,
+            SUM(amount) as total_amount,
+            MIN(price) as min_price,
+            MAX(price) as max_price,
+            MAX(allocated) as allocated,
+            MIN(created_at) as first_bought
+          FROM trades 
+          WHERE user_id = ? AND action = 'buy' AND status = 'open'
+          GROUP BY token
+          ORDER BY first_bought ASC`,
+    args: [userId]
   });
+  return r.rows;
 }
 
-// Bu token uchun ochiq (sotilmagan) xaridlar
+// Alohida har bir ochiq pozitsiya (24h tekshiruv uchun)
 async function getOpenPositions(userId) {
   const r = await db.execute({
     sql: `SELECT * FROM trades WHERE user_id = ? AND action = 'buy' AND status = 'open' ORDER BY created_at ASC`,
@@ -70,16 +81,15 @@ async function getOpenPositions(userId) {
   return r.rows;
 }
 
-// Token uchun jami xarid qilingan summa (ochiq pozitsiyalar)
-async function getTotalBoughtForToken(userId, token) {
-  const r = await db.execute({
-    sql: `SELECT COALESCE(SUM(amount), 0) as total FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND status = 'open'`,
+// Tokenning barcha ochiq xaridlarini yopish
+async function closeTokenPositions(userId, token) {
+  await db.execute({
+    sql: `UPDATE trades SET status = 'closed' WHERE user_id = ? AND token = ? AND action = 'buy' AND status = 'open'`,
     args: [userId, token]
   });
-  return r.rows[0]?.total || 0;
 }
 
-// Bu token uchun ajratilgan kapital (bir marta yozilgan)
+// Bu token uchun ajratilgan kapital
 async function getTokenAllocation(userId, token) {
   const r = await db.execute({
     sql: `SELECT allocated FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND allocated IS NOT NULL ORDER BY created_at ASC LIMIT 1`,
@@ -88,7 +98,15 @@ async function getTokenAllocation(userId, token) {
   return r.rows.length > 0 ? r.rows[0].allocated : null;
 }
 
-// Bugungi savdolar
+// Bu token uchun jami xarid qilingan (ochiq)
+async function getTotalBoughtForToken(userId, token) {
+  const r = await db.execute({
+    sql: `SELECT COALESCE(SUM(amount), 0) as total FROM trades WHERE user_id = ? AND token = ? AND action = 'buy' AND status = 'open'`,
+    args: [userId, token]
+  });
+  return Number(r.rows[0]?.total) || 0;
+}
+
 async function getTodayTrades(userId) {
   const r = await db.execute({
     sql: `SELECT * FROM trades WHERE user_id = ? AND DATE(created_at) = DATE('now','localtime') ORDER BY created_at DESC`,
@@ -128,9 +146,9 @@ function getTradeStats(trades) {
   const total = sells.length;
   const profitable = sells.filter(t => t.profit > 0);
   const losing = sells.filter(t => t.profit <= 0);
-  const totalPnL = sells.reduce((s, t) => s + t.profit, 0);
-  const best = sells.reduce((b, t) => (!b || t.profit > b.profit) ? t : b, null);
-  const worst = sells.reduce((w, t) => (!w || t.profit < w.profit) ? t : w, null);
+  const totalPnL = sells.reduce((s, t) => s + Number(t.profit), 0);
+  const best = sells.reduce((b, t) => (!b || Number(t.profit) > Number(b.profit)) ? t : b, null);
+  const worst = sells.reduce((w, t) => (!w || Number(t.profit) < Number(w.profit)) ? t : w, null);
   const winRate = ((profitable.length / total) * 100).toFixed(1);
   const avgPnL = (totalPnL / total).toFixed(2);
 
@@ -138,7 +156,7 @@ function getTradeStats(trades) {
   sells.forEach(t => {
     if (!tokenStats[t.token]) tokenStats[t.token] = { count: 0, pnl: 0 };
     tokenStats[t.token].count++;
-    tokenStats[t.token].pnl += t.profit;
+    tokenStats[t.token].pnl += Number(t.profit);
   });
   const topToken = Object.entries(tokenStats).sort((a, b) => b[1].pnl - a[1].pnl)[0];
 
@@ -155,8 +173,9 @@ async function setSetting(userId, key, value) {
 }
 
 module.exports = {
-  initDB, saveTrade, closePosition,
-  getOpenPositions, getTotalBoughtForToken, getTokenAllocation,
+  db, initDB, saveTrade,
+  getOpenPositions, getOpenPositionsGrouped,
+  closeTokenPositions, getTokenAllocation, getTotalBoughtForToken,
   getTodayTrades, getWeekTrades, getMonthTrades, getAllTrades,
   getTradeStats, getSetting, setSetting
 };
